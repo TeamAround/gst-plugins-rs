@@ -15,11 +15,12 @@ use gst_base::subclass::prelude::*;
 
 use futures::future;
 use rusoto_core::{region::Region, request::HttpClient};
-use rusoto_credential::StaticProvider;
+use rusoto_credential::{AutoRefreshingProvider, DefaultCredentialsProvider, StaticProvider};
 use rusoto_s3::{
     AbortMultipartUploadRequest, CompleteMultipartUploadRequest, CompletedMultipartUpload,
     CompletedPart, CreateMultipartUploadRequest, S3Client, UploadPartRequest, S3,
 };
+use rusoto_sts::WebIdentityProvider;
 
 use once_cell::sync::Lazy;
 
@@ -445,7 +446,29 @@ impl S3Sink {
                     s3url.region.clone(),
                 )
             }
-            _ => S3Client::new(s3url.region.clone()),
+            _ => {
+                let http_client = HttpClient::new().expect("failed to create request dispatcher");
+                if let Ok(_role) = std::env::var("AWS_ROLE_ARN") {
+                    let base_credentials_provider = WebIdentityProvider::from_k8s_env();
+                    let credentials_provider =
+                        AutoRefreshingProvider::new(base_credentials_provider)
+                            .expect("create refreshing credentials provider");
+
+                    rusoto_s3::S3Client::new_with(
+                        http_client,
+                        credentials_provider,
+                        s3url.region.clone(),
+                    )
+                } else {
+                    let credentials_provider =
+                        DefaultCredentialsProvider::new().expect("create default provider");
+                    rusoto_s3::S3Client::new_with(
+                        http_client,
+                        credentials_provider,
+                        s3url.region.clone(),
+                    )
+                }
+            }
         };
 
         let create_multipart_req = self.create_create_multipart_upload_request(&s3url, &settings);
