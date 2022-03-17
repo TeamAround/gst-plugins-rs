@@ -216,6 +216,14 @@ impl S3Sink {
         let upload_id = &state.upload_id;
         let client = &state.client;
 
+        gst::info!(
+            CAT, 
+            obj: element, 
+            "flush_current_buffer() | uploading a new part [upload_id:{}, part_number:{}]", 
+            upload_id, 
+            part_number
+        );
+
         let upload_part_req_future =
             || client.upload_part(self.create_upload_part_request(&body, part_number, upload_id));
 
@@ -288,7 +296,12 @@ impl S3Sink {
             e_tag: output.e_tag,
             part_number: Some(part_number),
         });
-        gst::info!(CAT, obj: element, "Uploaded part {}", part_number);
+        gst::info!(
+            CAT, 
+            obj: element, 
+            "flush_current_buffer() | uploaded with success [part_number:{}]", 
+            part_number
+        );
 
         Ok(())
     }
@@ -429,7 +442,7 @@ impl S3Sink {
         self.complete_multipart_upload_request(started_state)
     }
 
-    fn start(&self) -> Result<(), gst::ErrorMessage> {
+    fn start(&self, element: &super::S3Sink) -> Result<(), gst::ErrorMessage> {
         let mut state = self.state.lock().unwrap();
         let settings = self.settings.lock().unwrap();
 
@@ -488,6 +501,12 @@ impl S3Sink {
         let create_multipart_req = self.create_create_multipart_upload_request(&s3url, &settings);
         let create_multipart_req_future = client.create_multipart_upload(create_multipart_req);
 
+        gst::info!(
+            CAT,
+            obj: element,
+            "start() | creating multipart upload"
+        );
+
         let response = s3utils::wait(&self.canceller, create_multipart_req_future).map_err(
             |err| match err {
                 WaitError::FutureError(err) => gst::error_msg!(
@@ -500,12 +519,25 @@ impl S3Sink {
             },
         )?;
 
+        gst::info!(
+            CAT, 
+            obj: element,
+            "start() | trying to get upload_id"
+        );
+
         let upload_id = response.upload_id.ok_or_else(|| {
             gst::error_msg!(
                 gst::ResourceError::Failed,
                 ["Failed to get multipart upload ID"]
             )
         })?;
+
+        gst::info!(
+            CAT, 
+            obj: element,
+            "start() | got upload_id [upload_id:{}]", 
+            upload_id
+        );
 
         *state = State::Started(Started::new(
             client,
@@ -880,8 +912,8 @@ impl URIHandlerImpl for S3Sink {
 }
 
 impl BaseSinkImpl for S3Sink {
-    fn start(&self, _element: &Self::Type) -> Result<(), gst::ErrorMessage> {
-        self.start()
+    fn start(&self, element: &Self::Type) -> Result<(), gst::ErrorMessage> {
+        self.start(element)
     }
 
     fn stop(&self, element: &Self::Type) -> Result<(), gst::ErrorMessage> {
