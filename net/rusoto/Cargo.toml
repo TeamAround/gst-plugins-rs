@@ -15,6 +15,7 @@ bytes = "1.0"
 futures = "0.3"
 gst = { package = "gstreamer", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs" }
 gst-base = { package = "gstreamer-base", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs" }
+rusoto_sts = "0.48"
 rusoto_core = "0.48"
 rusoto_s3 = "0.48"
 rusoto_credential = "0.48"
