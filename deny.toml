@@ -126,16 +126,20 @@ version = "0.9"
 name = "sha-1"
 version = "0.9"
 
-# ignore duplicated miniz_oxide dependency because flate2 depends on an old version
-# https://github.com/rust-lang/flate2-rs/pull/293
+# ignore duplicated tokio-util dependency because librespot/reqwest depend on an old version
 [[bans.skip]]
-name = "miniz_oxide"
-version = "0.4"
+name = "tokio-util"
+version = "0.6"
 
 # ignore duplicated wasi dependency because various crates depends on an old version
 [[bans.skip]]
 name = "wasi"
 version = "0.10"
+
+# ignore duplicated uuid dependency because librespot depends on an old version
+[[bans.skip]]
+name = "uuid"
+version = "0.8"
 
 [sources]
 unknown-registry = "deny"
@@ -146,4 +150,5 @@ allow-git = [
   "https://github.com/gtk-rs/gtk4-rs",
   "https://github.com/rust-av/ffv1",
   "https://github.com/rust-av/flavors",
+  "https://github.com/philn/color-thief-rs",
 ]

@@ -151,8 +151,8 @@ impl SinkHandler {
     ) -> BTreeSet<GapPacket> {
         gst::info!(CAT, obj: element, "Resetting");
 
-        state.jbuf.borrow().flush();
-        state.jbuf.borrow().reset_skew();
+        state.jbuf.flush();
+        state.jbuf.reset_skew();
         state.discont = true;
 
         state.last_popped_seqnum = None;
@@ -180,26 +180,38 @@ impl SinkHandler {
     ) -> Result<gst::FlowSuccess, gst::FlowError> {
         let s = caps.structure(0).ok_or(gst::FlowError::Error)?;
 
-        gst::info!(CAT, obj: element, "Parsing {:?}", caps);
+        gst::debug!(CAT, obj: element, "Parsing {:?}", caps);
 
-        let payload = s.get::<i32>("payload").map_err(|_| gst::FlowError::Error)?;
+        let payload = s.get::<i32>("payload").map_err(|err| {
+            gst::debug!(CAT, obj: element, "Caps 'payload': {}", err);
+            gst::FlowError::Error
+        })?;
 
         if pt != 0 && payload as u8 != pt {
+            gst::debug!(
+                CAT,
+                obj: element,
+                "Caps 'payload' ({}) doesn't match payload type ({})",
+                payload,
+                pt
+            );
             return Err(gst::FlowError::Error);
         }
 
         inner.last_pt = Some(pt);
-        let clock_rate = s
-            .get::<i32>("clock-rate")
-            .map_err(|_| gst::FlowError::Error)?;
+        let clock_rate = s.get::<i32>("clock-rate").map_err(|err| {
+            gst::debug!(CAT, obj: element, "Caps 'clock-rate': {}", err);
+            gst::FlowError::Error
+        })?;
 
         if clock_rate <= 0 {
+            gst::debug!(CAT, obj: element, "Caps 'clock-rate' <= 0");
             return Err(gst::FlowError::Error);
         }
         state.clock_rate = Some(clock_rate as u32);
 
         inner.packet_rate_ctx.reset(clock_rate);
-        state.jbuf.borrow().set_clock_rate(clock_rate as u32);
+        state.jbuf.set_clock_rate(clock_rate as u32);
 
         Ok(gst::FlowSuccess::Ok)
     }
@@ -371,8 +383,14 @@ impl SinkHandler {
                 drop(state);
                 let caps = element
                     .try_emit_by_name::<Option<gst::Caps>>("request-pt-map", &[&(pt as u32)])
-                    .map_err(|_| gst::FlowError::Error)?
-                    .ok_or(gst::FlowError::Error)?;
+                    .map_err(|err| {
+                        gst::error!(CAT, obj: pad, "Emitting 'request-pt-map': {}", err);
+                        gst::FlowError::Error
+                    })?
+                    .ok_or_else(|| {
+                        gst::error!(CAT, obj: pad, "Signal 'request-pt-map' retuned None");
+                        gst::FlowError::Error
+                    })?;
                 let mut state = jb.state.lock().unwrap();
                 self.parse_caps(inner, &mut state, element, &caps, pt)?;
                 state
@@ -386,14 +404,9 @@ impl SinkHandler {
         let max_dropout = inner.packet_rate_ctx.max_dropout(max_dropout_time as i32);
         let max_misorder = inner.packet_rate_ctx.max_dropout(max_misorder_time as i32);
 
-        pts = state.jbuf.borrow().calculate_pts(
-            dts,
-            estimated_dts,
-            rtptime,
-            element.base_time(),
-            0,
-            false,
-        );
+        pts = state
+            .jbuf
+            .calculate_pts(dts, estimated_dts, rtptime, element.base_time(), 0, false);
 
         if pts.is_none() {
             gst::debug!(
@@ -444,7 +457,7 @@ impl SinkHandler {
             RTPJitterBufferItem::new(buffer, dts, pts, Some(seq), rtptime)
         };
 
-        let (success, _, _) = state.jbuf.borrow().insert(jb_item);
+        let (success, _, _) = state.jbuf.insert(jb_item);
 
         if !success {
             /* duplicate */
@@ -760,7 +773,7 @@ impl SrcHandler {
             let mut state = jb.state.lock().unwrap();
 
             let mut discont = false;
-            let (jb_item, _) = state.jbuf.borrow().pop();
+            let (jb_item, _) = state.jbuf.pop();
 
             let jb_item = match jb_item {
                 None => {
@@ -977,7 +990,7 @@ struct Stats {
 
 // Shared state between element, sink and source pad
 struct State {
-    jbuf: glib::SendUniqueCell<RTPJitterBuffer>,
+    jbuf: RTPJitterBuffer,
 
     last_res: Result<gst::FlowSuccess, gst::FlowError>,
     position: Option<gst::ClockTime>,
@@ -1005,7 +1018,7 @@ struct State {
 impl Default for State {
     fn default() -> State {
         State {
-            jbuf: glib::SendUniqueCell::new(RTPJitterBuffer::new()).unwrap(),
+            jbuf: RTPJitterBuffer::new(),
 
             last_res: Ok(gst::FlowSuccess::Ok),
             position: None,
@@ -1093,7 +1106,7 @@ impl TaskImpl for JitterBufferTask {
                             let (delay_fut, abort_handle) = abortable(async move {
                                 match next_wakeup {
                                     Some((_, delay)) => {
-                                        runtime::time::delay_for(delay).await;
+                                        runtime::time::delay_for_at_least(delay).await;
                                     }
                                     None => {
                                         future::pending::<()>().await;
@@ -1148,7 +1161,7 @@ impl TaskImpl for JitterBufferTask {
                         return Ok(());
                     }
 
-                    let (head_pts, head_seq) = state.jbuf.borrow().peek();
+                    let (head_pts, head_seq) = state.jbuf.peek();
 
                     (head_pts, head_seq)
                 };
@@ -1161,7 +1174,7 @@ impl TaskImpl for JitterBufferTask {
                     state.last_res = res;
 
                     if head_pts == state.earliest_pts && head_seq == state.earliest_seqnum {
-                        let (earliest_pts, earliest_seqnum) = state.jbuf.borrow().find_earliest();
+                        let (earliest_pts, earliest_seqnum) = state.jbuf.find_earliest();
                         state.earliest_pts = earliest_pts;
                         state.earliest_seqnum = earliest_seqnum;
                     }
@@ -1248,15 +1261,15 @@ static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
 
 impl JitterBuffer {
     fn clear_pt_map(&self, element: &super::JitterBuffer) {
-        gst::info!(CAT, obj: element, "Clearing PT map");
+        gst::debug!(CAT, obj: element, "Clearing PT map");
 
         let mut state = self.state.lock().unwrap();
         state.clock_rate = None;
-        state.jbuf.borrow().reset_skew();
+        state.jbuf.reset_skew();
     }
 
     fn prepare(&self, element: &super::JitterBuffer) -> Result<(), gst::ErrorMessage> {
-        gst::info!(CAT, obj: element, "Preparing");
+        gst::debug!(CAT, obj: element, "Preparing");
 
         let context = {
             let settings = self.settings.lock().unwrap();
@@ -1275,7 +1288,7 @@ impl JitterBuffer {
                 )
             })?;
 
-        gst::info!(CAT, obj: element, "Prepared");
+        gst::debug!(CAT, obj: element, "Prepared");
 
         Ok(())
     }
@@ -1434,7 +1447,7 @@ impl ObjectImpl for JitterBuffer {
                 };
 
                 let state = self.state.lock().unwrap();
-                state.jbuf.borrow().set_delay(latency);
+                state.jbuf.set_delay(latency);
 
                 let _ = obj.post_message(gst::message::Latency::builder().src(obj).build());
             }
