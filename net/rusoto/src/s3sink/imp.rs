@@ -395,6 +395,7 @@ impl S3Sink {
         &self,
         started_state: &Started,
     ) -> Result<(), gst::ErrorMessage> {
+        let settings = self.settings.lock().unwrap();
         let s3url = match *self.url.lock().unwrap() {
             Some(ref url) => url.clone(),
             None => unreachable!("Element should be started"),
@@ -409,8 +410,8 @@ impl S3Sink {
 
         s3utils::wait_retry(
             &self.abort_multipart_canceller,
-            Some(Duration::from_millis(DEFAULT_REQUEST_TIMEOUT_MSEC)),
-            Some(Duration::from_millis(DEFAULT_RETRY_DURATION_MSEC)),
+            settings.request_timeout,
+            settings.retry_duration,
             abort_req_future,
         )
         .map(|_| ())
@@ -434,6 +435,8 @@ impl S3Sink {
         &self,
         started_state: &mut Started,
     ) -> Result<(), gst::ErrorMessage> {
+        let settings = self.settings.lock().unwrap();
+
         started_state
             .completed_parts
             .sort_by(|a, b| a.part_number.cmp(&b.part_number));
@@ -453,8 +456,8 @@ impl S3Sink {
 
         s3utils::wait_retry(
             &self.canceller,
-            Some(Duration::from_millis(DEFAULT_COMPLETE_REQUEST_TIMEOUT_MSEC)),
-            Some(Duration::from_millis(DEFAULT_COMPLETE_RETRY_DURATION_MSEC)),
+            settings.complete_upload_request_timeout,
+            settings.complete_upload_retry_duration,
             complete_req_future,
         )
         .map(|_| ())
@@ -560,8 +563,8 @@ impl S3Sink {
 
         let response = s3utils::wait_retry(
             &self.canceller,
-            Some(Duration::from_millis(DEFAULT_REQUEST_TIMEOUT_MSEC)),
-            Some(Duration::from_millis(DEFAULT_RETRY_DURATION_MSEC)),
+            settings.request_timeout,
+            settings.retry_duration,
             create_multipart_req_future,
         )
         .map_err(|err| match err {
